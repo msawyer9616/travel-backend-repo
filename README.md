@@ -1,1 +1,1 @@
-# travel-backend-repo
+# travel-backend-repoimport { createClient } from '@supabase/supabase-js';
