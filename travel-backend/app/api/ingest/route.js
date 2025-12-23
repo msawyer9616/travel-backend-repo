@@ -33,9 +33,10 @@ export async function GET(req) {
   const urlParams = new URL(req.url);
   const secret = urlParams.searchParams.get('secret');
   
-  // Allow dynamic page and count from URL (Defaults: Page 1, 10 posts)
+  // Allow dynamic page and count from URL (Defaults: Page 1, 5 posts)
+  // Lowered default from 10 to 5 to prevent timeouts on Vercel Free Tier
   const page = urlParams.searchParams.get('page') || '1';
-  const perPage = urlParams.searchParams.get('per_page') || '10';
+  const perPage = urlParams.searchParams.get('per_page') || '5';
 
   if (secret !== INGEST_SECRET) {
     return new Response('Unauthorized', { status: 401 });
