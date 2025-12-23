@@ -2,6 +2,8 @@ import { createClient } from '@supabase/supabase-js';
 import OpenAI from 'openai';
 import * as cheerio from 'cheerio';
 
+export const maxDuration = 60;
+
 const INGEST_SECRET = process.env.INGEST_SECRET;
 
 const supabase = createClient(
@@ -35,7 +37,7 @@ export async function GET(req) {
     return new Response('Unauthorized', { status: 401 });
   }
 
-  const wpRes = await fetch(`${process.env.WP_BASE_URL}/wp-json/wp/v2/posts?per_page=20&_fields=id,link,title,content`);
+  const wpRes = await fetch(`${process.env.WP_BASE_URL}/wp-json/wp/v2/posts?per_page=5&_fields=id,link,title,content`);
   const posts = await wpRes.json();
   
   let totalChunks = 0;
