@@ -30,17 +30,33 @@ function chunkText(text, maxLength = 1000) {
 }
 
 export async function GET(req) {
-  const { searchParams } = new URL(req.url);
-  const secret = searchParams.get('secret');
+  const urlParams = new URL(req.url);
+  const secret = urlParams.searchParams.get('secret');
+  
+  // Allow dynamic page and count from URL (Defaults: Page 1, 10 posts)
+  const page = urlParams.searchParams.get('page') || '1';
+  const perPage = urlParams.searchParams.get('per_page') || '10';
 
   if (secret !== INGEST_SECRET) {
     return new Response('Unauthorized', { status: 401 });
   }
 
-  // Fetch 5 posts at a time to stay safe
-  const wpRes = await fetch(`${process.env.WP_BASE_URL}/wp-json/wp/v2/posts?per_page=5&_fields=id,link,title,content`);
+  console.log(`Fetching Page ${page} with ${perPage} posts...`);
+
+  // Fetch posts from WordPress with pagination
+  const wpRes = await fetch(`${process.env.WP_BASE_URL}/wp-json/wp/v2/posts?per_page=${perPage}&page=${page}&_fields=id,link,title,content`);
+  
+  if (!wpRes.ok) {
+    return new Response(JSON.stringify({ error: "Failed to fetch from WordPress. Check page number." }), { status: 400 });
+  }
+
   const posts = await wpRes.json();
   
+  // If empty, we reached the end
+  if (posts.length === 0) {
+    return new Response(JSON.stringify({ success: true, message: "No more posts found.", page: page }), { headers: { 'Content-Type': 'application/json' }});
+  }
+
   let totalChunks = 0;
 
   for (const post of posts) {
@@ -59,7 +75,6 @@ export async function GET(req) {
     const rowsToInsert = [];
 
     // 2. Generate Embeddings (Parallel)
-    // We create a list of promises to do them all at once
     const embeddingPromises = textChunks.map(async (chunkContent) => {
         const embeddingRes = await openai.embeddings.create({
             model: 'text-embedding-3-small',
@@ -67,7 +82,6 @@ export async function GET(req) {
         });
         const embedding = embeddingRes.data[0].embedding;
         
-        // Add to our list
         rowsToInsert.push({
             post_id: post.id,
             url,
@@ -77,17 +91,21 @@ export async function GET(req) {
         });
     });
 
-    // Wait for all embeddings to finish
     await Promise.all(embeddingPromises);
 
-    // 3. Bulk Insert (One database call instead of many)
+    // 3. Bulk Insert
     if (rowsToInsert.length > 0) {
         await supabase.from('tb_chunks').insert(rowsToInsert);
         totalChunks += rowsToInsert.length;
     }
   }
 
-  return new Response(JSON.stringify({ success: true, processed: posts.length, chunks: totalChunks }), {
+  return new Response(JSON.stringify({ 
+    success: true, 
+    page: page, 
+    posts_processed: posts.length, 
+    chunks_created: totalChunks 
+  }), {
     headers: { 'Content-Type': 'application/json' }
   });
 }
