@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import OpenAI from 'openai';
 import * as cheerio from 'cheerio';
 
-export const maxDuration = 60;
+export const maxDuration = 60; // Allow up to 60 seconds
 
 const INGEST_SECRET = process.env.INGEST_SECRET;
 
@@ -37,12 +37,14 @@ export async function GET(req) {
     return new Response('Unauthorized', { status: 401 });
   }
 
+  // Fetch 5 posts at a time to stay safe
   const wpRes = await fetch(`${process.env.WP_BASE_URL}/wp-json/wp/v2/posts?per_page=5&_fields=id,link,title,content`);
   const posts = await wpRes.json();
   
   let totalChunks = 0;
 
   for (const post of posts) {
+    // 1. Clean up old data for this post
     await supabase.from('tb_chunks').delete().eq('post_id', post.id);
 
     const $ = cheerio.load(post.content.rendered);
@@ -54,22 +56,34 @@ export async function GET(req) {
     const cleanText = $('body').text().replace(/\s+/g, ' ').trim();
 
     const textChunks = chunkText(cleanText, 1500); 
+    const rowsToInsert = [];
 
-    for (const chunkContent of textChunks) {
-       const embeddingRes = await openai.embeddings.create({
-         model: 'text-embedding-3-small',
-         input: chunkContent
-       });
-       const embedding = embeddingRes.data[0].embedding;
+    // 2. Generate Embeddings (Parallel)
+    // We create a list of promises to do them all at once
+    const embeddingPromises = textChunks.map(async (chunkContent) => {
+        const embeddingRes = await openai.embeddings.create({
+            model: 'text-embedding-3-small',
+            input: chunkContent
+        });
+        const embedding = embeddingRes.data[0].embedding;
+        
+        // Add to our list
+        rowsToInsert.push({
+            post_id: post.id,
+            url,
+            title,
+            content: chunkContent,
+            embedding
+        });
+    });
 
-       await supabase.from('tb_chunks').insert({
-         post_id: post.id,
-         url,
-         title,
-         content: chunkContent,
-         embedding
-       });
-       totalChunks++;
+    // Wait for all embeddings to finish
+    await Promise.all(embeddingPromises);
+
+    // 3. Bulk Insert (One database call instead of many)
+    if (rowsToInsert.length > 0) {
+        await supabase.from('tb_chunks').insert(rowsToInsert);
+        totalChunks += rowsToInsert.length;
     }
   }
 
